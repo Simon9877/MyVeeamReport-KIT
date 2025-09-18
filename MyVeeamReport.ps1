@@ -483,17 +483,68 @@ $repoListSo = Get-VBRBackupRepository -ScaleOut
 # Get all Tape Servers
 $tapesrvList = Get-VBRTapeServer
 
-# Convert mode (timeframe) to hours
-If ($reportMode -eq "Monthly") {
-  $HourstoCheck = 720
-} Elseif ($reportMode -eq "Weekly") {
-  $HourstoCheck = 168
-} Else {
-  $HourstoCheck = $reportMode
+# Determine reporting timeframe boundaries
+$reportEndTime = Get-Date
+$reportStartTime = $reportEndTime
+
+switch ($reportMode) {
+  "Monthly" {
+    $reportStartTime = $reportEndTime.AddHours(-720)
+  }
+  "Weekly" {
+    $reportStartTime = $reportEndTime.AddHours(-168)
+  }
+  { $_ -match '^Q[1-4]$' } {
+    $currentYear = $reportEndTime.Year
+    $quarterIndex = [int]$reportMode.Substring(1) - 1
+    $quarterStartMonth = ($quarterIndex * 3) + 1
+    $reportStartTime = Get-Date -Year $currentYear -Month $quarterStartMonth -Day 1 -Hour 0 -Minute 0 -Second 0
+    $nextQuarterMonth = $quarterStartMonth + 3
+    if ($nextQuarterMonth -le 12) {
+      $reportEndTime = Get-Date -Year $currentYear -Month $nextQuarterMonth -Day 1 -Hour 0 -Minute 0 -Second 0
+    } else {
+      $reportEndTime = Get-Date -Year ($currentYear + 1) -Month 1 -Day 1 -Hour 0 -Minute 0 -Second 0
+    }
+    $reportEndTime = $reportEndTime.AddSeconds(-1)
+    $now = Get-Date
+    if ($reportEndTime -gt $now) {
+      $reportEndTime = $now
+    }
+  }
+  default {
+    $reportNumeric = 0.0
+    if ([double]::TryParse($reportMode, [ref]$reportNumeric)) {
+      $reportStartTime = $reportEndTime.AddHours(-$reportNumeric)
+    } else {
+      Throw "Invalid report mode specified: $reportMode"
+    }
+  }
+}
+
+Set-Variable -Name reportStartTime -Scope Script -Value $reportStartTime
+Set-Variable -Name reportEndTime -Scope Script -Value $reportEndTime
+
+Function Test-ReportTimeframe {
+  param(
+    [datetime]$StartTime,
+    [datetime]$EndTime
+  )
+
+  if (($null -ne $StartTime) -and ($StartTime -ge $script:reportStartTime) -and ($StartTime -le $script:reportEndTime)) {
+    return $true
+  }
+  if (($null -ne $EndTime) -and ($EndTime -ge $script:reportStartTime) -and ($EndTime -le $script:reportEndTime)) {
+    return $true
+  }
+  if (($null -ne $StartTime) -and ($null -ne $EndTime) -and ($StartTime -lt $script:reportStartTime) -and ($EndTime -gt $script:reportEndTime)) {
+    return $true
+  }
+
+  return $false
 }
 
 # Gather all Backup Sessions within timeframe
-$sessListBk = @($allSess | Where-Object {($_.EndTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.State -eq "Working") -and $_.JobType -eq "Backup"})
+$sessListBk = @($allSess | Where-Object {((Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or $_.State -eq "Working") -and $_.JobType -eq "Backup"})
 If ($null -ne $backupJob -and $backupJob -ne "") {
   $allJobsBkTmp = @()
   $sessListBkTmp = @()
@@ -528,7 +579,7 @@ $failedSessionsBk = @($sessListBk | Where-Object {($_.Result -eq "Failed") -and 
 
 # File Backup Session Section Start
 
-$fileSessListBk = @($allFileSess | Where-Object {($_.EndTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.State -eq "Working") -and $_.JobType -eq "Backup"})
+$fileSessListBk = @($allFileSess | Where-Object {((Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or $_.State -eq "Working") -and $_.JobType -eq "Backup"})
 If ($null -ne $backupJob -and $backupJob -ne "") {
   $allFileJobsBkTmp = @()
   $fileSessListBkTmp = @()
@@ -566,13 +617,13 @@ $failedFileSessionsBk = @($fileSessListBk | Where-Object {($_.Result -eq "Failed
 # End File Backup Session Section End
 
 # Gather VM Restore Sessions within timeframe
-$sessListResto = @($allSessResto | Where-Object {$_.EndTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$HourstoCheck) -or !($_.IsCompleted)})
+$sessListResto = @($allSessResto | Where-Object {(Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or !($_.IsCompleted)})
 # Get VM Restore Session information
 $completeResto = @($sessListResto | Where-Object {$_.IsCompleted})
 $runningResto = @($sessListResto | Where-Object {!($_.IsCompleted)})
 
 # Gather all Replication Sessions within timeframe
-$sessListRp = @($allSess | Where-Object {($_.EndTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.State -eq "Working") -and $_.JobType -eq "Replica"})
+$sessListRp = @($allSess | Where-Object {((Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or $_.State -eq "Working") -and $_.JobType -eq "Replica"})
 If ($null -ne $replicaJob -and $replicaJob -ne "") {
   $allJobsRpTmp = @()
   $sessListRpTmp = @()
@@ -602,7 +653,7 @@ $runningSessionsRp = @($sessListRp | Where-Object {$_.State -eq "Working"})
 $failedSessionsRp = @($sessListRp | Where-Object {($_.Result -eq "Failed") -and ($_.WillBeRetried -ne "True")})
 
 # Gather all Backup Copy Sessions within timeframe
-$sessListBc = @($allSess | Where-Object {($_.EndTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.State -match "Working|Idle") -and ($_.JobType -eq "BackupSync" -or $_.JobType -eq "SimpleBackupCopyWorker")})
+$sessListBc = @($allSess | Where-Object {((Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or $_.State -match "Working|Idle") -and ($_.JobType -eq "BackupSync" -or $_.JobType -eq "SimpleBackupCopyWorker")})
 If ($null -ne $bcopyJob -and $bcopyJob -ne "") {
   $allJobsBcTmp = @()
   $sessListBcTmp = @()
@@ -635,7 +686,7 @@ $failsSessionsBc = @($sessListBc | Where-Object {$_.Result -eq "Failed"})
 $workingSessionsBc = @($sessListBc | Where-Object {$_.State -eq "Working"})
 
 # Gather all Tape Backup Sessions within timeframe
-$sessListTp = @($allSessTp | Where-Object {$_.EndTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.State -match "Working|Idle"})
+$sessListTp = @($allSessTp | Where-Object {(Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or $_.State -match "Working|Idle"})
 If ($null -ne $tapeJob -and $tapeJob -ne "") {
   $allJobsTpTmp = @()
   $sessListTpTmp = @()
@@ -666,7 +717,7 @@ $workingSessionsTp = @($sessListTp | Where-Object {$_.State -eq "Working"})
 $waitingSessionsTp = @($sessListTp | Where-Object {$_.State -eq "WaitingTape"})
 
 # Gather all Agent Backup Sessions within timeframe
-$sessListEp = $allSessEp | Where-Object {($_.EndTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.State -eq "Working")}
+$sessListEp = $allSessEp | Where-Object {(Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or $_.State -eq "Working"}
 If ($null -ne $epbJob -and $epbJob -ne "") {
   $allJobsEpTmp = @()
   $sessListEpTmp = @()
@@ -696,7 +747,7 @@ $failsSessionsEp = @($sessListEp | Where-Object {$_.Result -eq "Failed"})
 $runningSessionsEp = @($sessListEp | Where-Object {$_.State -eq "Working"})
 
 # Gather all SureBackup Sessions within timeframe
-$sessListSb = @($allSessSb | Where-Object {$_.EndTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.State -ne "Stopped"})
+$sessListSb = @($allSessSb | Where-Object {(Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or $_.State -ne "Stopped"})
 If ($null -ne $surebJob -and $surebJob -ne "") {
   $allJobsSbTmp = @()
   $sessListSbTmp = @()
@@ -721,7 +772,12 @@ $failsSessionsSb = @($sessListSb | Where-Object {$_.Result -eq "Failed"})
 $runningSessionsSb = @($sessListSb | Where-Object {$_.State -ne "Stopped"})
 
 # Format Report Mode for header
-If (($reportMode -ne "Weekly") -And ($reportMode -ne "Monthly")) {
+$modeIsNumeric = $false
+$modeNumeric = 0.0
+if ([double]::TryParse($reportMode, [ref]$modeNumeric)) {
+  $modeIsNumeric = $true
+}
+If ($modeIsNumeric) {
   $rptMode = "RPO: $reportMode Hrs"
 } Else {
   $rptMode = "RPO: $reportMode"
@@ -734,24 +790,7 @@ If ($showVBR) {
   $vbrName = $null
 }
 
-# Append Report Mode to Email subject
-If ($modeSubject) {
-  If (($reportMode -ne "Weekly") -And ($reportMode -ne "Monthly")) {
-    $emailSubject = "$emailSubject (Last $reportMode Hrs)"
-  } Else {
-    $emailSubject = "$emailSubject ($reportMode)"
-  }
-}
-
-# Append VBR Server to Email subject
-If ($vbrSubject) {
-  $emailSubject = "$emailSubject - $vbrServer"
-}
-
-# Append Date and Time to Email subject
-If ($dtSubject) {
-  $emailSubject = "$emailSubject - $(Get-Date -format g)"
-}
+# Email output removed for manual reporting
 #endregion
 
 #region Functions
@@ -1127,7 +1166,7 @@ Function Get-VMsBackupStatus {
   }
   # Find all backup task sessions that have ended in the last x hours
   $vbrtasksessions = (Get-VBRBackupSession |
-    Where-Object {($_.JobType -eq "Backup") -and ($_.EndTime -ge (Get-Date).addhours(-$script:HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$script:HourstoCheck) -or $_.State -eq "Working")}) |
+    Where-Object {($_.JobType -eq "Backup") -and ((Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or $_.State -eq "Working")}) |
     Get-VBRTaskSession | Where-Object {$_.Status -notmatch "InProgress|Pending"}
   # Compare VM list to session list and update found VMs status
   If ($vbrtasksessions) {
@@ -1222,7 +1261,7 @@ function Get-BackupSize {
 Function Get-MultiJob {
   $outputAry = @()
   $vmMultiJobs = (Get-VBRBackupSession |
-    Where-Object {($_.JobType -eq "Backup") -and ($_.EndTime -ge (Get-Date).addhours(-$script:HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$script:HourstoCheck) -or $_.State -eq "Working")}) |
+    Where-Object {($_.JobType -eq "Backup") -and ((Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or $_.State -eq "Working")}) |
     Get-VBRTaskSession | Select-Object Name, @{Name="VMID"; Expression = {$_.Info.ObjectId}}, JobName -Unique | Group-Object Name, VMID | Where-Object {$_.Count -gt 1} | Select-Object -ExpandProperty Group
   ForEach ($vm in $vmMultiJobs) {
     $objID = $vm.VMID
@@ -2967,7 +3006,7 @@ If ($showAllSessTp) {
         $allSessTp += $tpSessions
       }
       # Gather all Tape Backup Sessions within timeframe
-      $sessListTp = @($allSessTp | Where-Object {$_.EndTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.CreationTime -ge (Get-Date).AddHours(-$HourstoCheck) -or $_.State -match "Working|Idle"})
+      $sessListTp = @($allSessTp | Where-Object {(Test-ReportTimeframe -Start $_.CreationTime -End $_.EndTime) -or $_.State -match "Working|Idle"})
       If ($null -ne $tapeJob -and $tapeJob -ne "") {
         $allJobsTpTmp = @()
         $sessListTpTmp = @()
@@ -3551,7 +3590,7 @@ If ($showExpTpVlt) {
 # Get all Tapes written to within time frame
 $bodyTpWrt = $null
 If ($showTpWrt) {
-  $expTapes = @($mediaTapes | Where-Object {$_.LastWriteTime -ge (Get-Date).AddHours(-$HourstoCheck)})
+  $expTapes = @($mediaTapes | Where-Object {($_.LastWriteTime -ge $script:reportStartTime) -and ($_.LastWriteTime -le $script:reportEndTime)})
   If ($expTapes.Count -gt 0) {
     $expTapes = $expTapes | Select-Object Name, Barcode,
     @{Name="Media Pool"; Expression = {
@@ -4320,19 +4359,16 @@ $htmlOutput = $htmlOutput.Replace("<td>Not Running<","<td style=""color: #ff0000
 $htmlOutput = $htmlOutput.Replace("<td>Failed<","<td style=""color: #ff0000;"">Failed<")
 $htmlOutput = $htmlOutput.Replace("<td>Critical<","<td style=""color: #ff0000;"">Critical<")
 $htmlOutput = $htmlOutput.Replace("<td>Dead<","<td style=""color: #ff0000;"">Dead<")
-# Color Report Header and Tag Email Subject
+# Color Report Header
 If ($htmlOutput -match "#FB9895") {
   # If any errors paint report header red
   $htmlOutput = $htmlOutput.Replace("ZZhdbgZZ","#FB9895")
-  $emailSubject = "[Failed] $emailSubject"
 } ElseIf ($htmlOutput -match "#ffd96c") {
   # If any warnings paint report header yellow
   $htmlOutput = $htmlOutput.Replace("ZZhdbgZZ","#ffd96c")
-  $emailSubject = "[Warning] $emailSubject"
 } ElseIf ($htmlOutput -match "#00b050") {
   # If any success paint report header green
   $htmlOutput = $htmlOutput.Replace("ZZhdbgZZ","#00b050")
-  $emailSubject = "[Success] $emailSubject"
 } Else {
   # Else paint gray
   $htmlOutput = $htmlOutput.Replace("ZZhdbgZZ","#626365")
@@ -4340,32 +4376,6 @@ If ($htmlOutput -match "#FB9895") {
 #endregion
 
 #region Output
-# Send Report via Email
-If ($sendEmail) {
-  $smtp = New-Object System.Net.Mail.SmtpClient($emailHost, $emailPort)
-  $smtp.Credentials = New-Object System.Net.NetworkCredential($emailUser, $emailPass)
-  $smtp.EnableSsl = $emailEnableSSL
-  $msg = New-Object System.Net.Mail.MailMessage($emailFrom, $emailTo)
-  $msg.Subject = $emailSubject
-  If ($emailAttach) {
-    $body = "Veeam Report Attached"
-    $msg.Body = $body
-    $tempFile = "$env:TEMP\$($rptTitle)_$(Get-Date -format yyyyMMdd_HHmmss).htm"
-    $htmlOutput | Out-File $tempFile
-    $attachment = New-Object System.Net.Mail.Attachment $tempFile
-    $msg.Attachments.Add($attachment)
-  } Else {
-    $body = $htmlOutput
-    $msg.Body = $body
-    $msg.isBodyhtml = $true
-  }
-  $smtp.send($msg)
-  If ($emailAttach) {
-    $attachment.dispose()
-    Remove-Item $tempFile
-  }
-}
-
 # Save HTML Report to File
 If ($saveHTML) {
   $htmlOutput | Out-File $pathHTML
