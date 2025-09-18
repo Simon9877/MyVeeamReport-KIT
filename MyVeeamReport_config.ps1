@@ -18,8 +18,8 @@
 # VBR Server (Server Name, FQDN, IP or localhost)
 $vbrServer = $env:computername
 #$vbrServer = "lab-vbr01"
-# Report mode (RPO) - valid modes: any number of hours, Weekly or Monthly
-# 24, 48, "Weekly", "Monthly"
+# Report mode (RPO) - valid modes: any number of hours, Weekly, Monthly or Quarterly (Q1-Q4)
+# 24, 48, "Weekly", "Monthly", "Q1"
 $reportMode = 24
 # Report Title
 $rptTitle = "My Veeam Report"
@@ -52,25 +52,7 @@ $exportAllTasksBkToCSV = $true
 $setCSVDelimiter = ";"
 
 
-# Email configuration
-$sendEmail = $false
-$emailHost = "smtp.yourserver.com"
-$emailPort = 25
-$emailEnableSSL = $false
-$emailUser = ""
-$emailPass = ""
-$emailFrom = "MyVeeamReport@yourdomain.com"
-$emailTo = "you@youremail.com"
-# Send HTML report as attachment (else HTML report is body)
-$emailAttach = $false
-# Email Subject 
-$emailSubject = $rptTitle
-# Append Report Mode to Email Subject E.g. My Veeam Report (Last 24 Hours)
-$modeSubject = $true
-# Append VBR Server name to Email Subject
-$vbrSubject = $true
-# Append Date and Time to Email Subject
-$dtSubject = $false
+# Email functionality removed for manual report execution
 
 #--------------------- Disable reports you do not need by setting them to "$false" below:                                                                                        
 # Show VM Backup Protection Summary (across entire infrastructure)
